@@ -1,0 +1,87 @@
+name: Backend Continuous Integration
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'starter/backend/**'   
+  workflow_dispatch:           
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: starter/backend
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ hashFiles('starter/backend/Pipfile.lock') }}
+          restore-keys: |
+            pip-
+
+      - name: Install pipenv
+        run: pip install pipenv
+
+      - name: Install dependencies (pipenv)
+        run: pipenv install --dev --deploy
+
+      - name: Run linter
+        run: pipenv run lint
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ hashFiles('starter/backend/Pipfile.lock') }}
+          restore-keys: |
+            pip-
+
+      - name: Install pipenv
+        run: pip install pipenv
+
+      - name: Install dependencies
+        run: pipenv install --dev --deploy
+
+      - name: Run tests
+        run: pipenv run test
+
+  build:
+    name: Build (Docker)
+    runs-on: ubuntu-latest
+    needs: [lint, test]           
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build backend image
+        run: |
+          docker build -t mp-backend:${{ github.sha }} .
+        working-directory: starter/backend
