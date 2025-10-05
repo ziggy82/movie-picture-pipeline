@@ -1,0 +1,140 @@
+name: Frontend Continuous Deployment
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - "starter/frontend/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FRONTEND_DIR: starter/frontend
+  ECR_REPO: frontend
+  IMAGE_TAG: ${{ github.sha }}
+  ECR_IMAGE: ${{ secrets.ECR_REGISTRY }}/frontend:${{ github.sha }}
+
+defaults:
+  run:
+    working-directory: starter/frontend
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18.x"
+          cache: "npm"
+          cache-dependency-path: starter/frontend/package-lock.json
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Run linter
+        run: npm run lint
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18.x"
+          cache: "npm"
+          cache-dependency-path: starter/frontend/package-lock.json
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Run tests (CI mode)
+        run: CI=true npm test
+
+  build_and_push:
+    name: Build and Push to ECR
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18.x"
+          cache: "npm"
+          cache-dependency-path: starter/frontend/package-lock.json
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Build Docker image
+        working-directory: starter/frontend
+        run: |
+          docker build \
+            --build-arg REACT_APP_MOVIE_API_URL="${{ secrets.FRONTEND_API_URL }}" \
+            -t "${{ env.ECR_IMAGE }}" .
+
+      - name: Push image to ECR
+        run: docker push "${{ env.ECR_IMAGE }}"
+
+  deploy:
+    name: Deploy to EKS
+    runs-on: ubuntu-latest
+    needs: [build_and_push]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --name "${{ secrets.EKS_CLUSTER_NAME }}" \
+            --region "${{ secrets.AWS_REGION }}"
+
+      - name: Install kustomize
+        run: |
+          curl -sSL https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh | bash
+          sudo mv kustomize /usr/local/bin/
+
+      - name: Set image tag in kustomize
+        working-directory: starter/frontend/k8s
+        run: |
+          kustomize edit set image frontend="${{ env.ECR_IMAGE }}"
+
+      - name: Apply manifests
+        working-directory: starter/frontend/k8s
+        run: |
+          kustomize build | kubectl apply -f -
+
+      - name: Wait for rollout
+        run: |
+          kubectl rollout status deployment/frontend --timeout=180s
