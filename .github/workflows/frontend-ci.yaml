@@ -1,0 +1,82 @@
+name: Frontend Continuous Integration
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "starter/frontend/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: starter/frontend
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18.x"
+          cache: "npm"
+          cache-dependency-path: starter/frontend/package-lock.json
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Run linter
+        run: npm run lint
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18.x"
+          cache: "npm"
+          cache-dependency-path: starter/frontend/package-lock.json
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Run tests (CI mode)
+        run: CI=true npm test
+
+  build:
+    name: Build (Docker)
+    runs-on: ubuntu-latest
+    needs: [lint, test] # only run if both pass
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18.x"
+          cache: "npm"
+          cache-dependency-path: starter/frontend/package-lock.json
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Docker build
+        working-directory: starter/frontend
+        run: |
+          # Build the frontend image. For CI we can use a dummy API URL.
+          docker build \
+            --build-arg REACT_APP_MOVIE_API_URL=http://example.com \
+            -t mp-frontend:${{ github.sha }} .
